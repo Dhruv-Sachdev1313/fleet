@@ -281,10 +281,21 @@ func TestGzipResponses(t *testing.T) {
 		// The response body is what the assertions inspect; a write error surfaces there.
 		_, _ = w.Write(data)
 	})
+	// gzhttp sniffs a missing Content-Type, and JSON sniffs as text/plain.
+	untypedJSONHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"data":"` + strings.Repeat("a", 2000) + `"}`))
+	})
+	binaryHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "2000")
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(make([]byte, 2000))
+	})
 	testRoute := func(r *endpointer.Router, opts []kithttp.ServerOption) {
 		r.Handle(endpointer.Route{Name: "test_gzip", Path: "/api/test-gzip"}, gzipTestHandler)
 		// A route with methods registers a different ServeMux pattern than one without.
 		r.Handle(endpointer.Route{Name: "test_gzip_get", Methods: []string{"GET"}, Path: "/api/test-gzip-get"}, gzipTestHandler)
+		r.Handle(endpointer.Route{Name: "test_gzip_untyped", Path: "/api/test-gzip-untyped"}, untypedJSONHandler)
+		r.Handle(endpointer.Route{Name: "test_gzip_binary", Path: "/api/test-gzip-binary"}, binaryHandler)
 	}
 
 	t.Run("Enabled", func(t *testing.T) {
@@ -298,16 +309,24 @@ func TestGzipResponses(t *testing.T) {
 		})
 		defer server.Close()
 
-		for _, path := range []string{"/api/test-gzip", "/api/test-gzip-get"} {
-			t.Run("WithAcceptEncoding "+path, func(t *testing.T) {
-				req, err := http.NewRequest("GET", server.URL+path, nil)
+		for _, tc := range []struct {
+			path         string
+			wantEncoding string
+		}{
+			{"/api/test-gzip", "gzip"},
+			{"/api/test-gzip-get", "gzip"},
+			{"/api/test-gzip-untyped", "gzip"},
+			{"/api/test-gzip-binary", ""},
+		} {
+			t.Run("WithAcceptEncoding "+tc.path, func(t *testing.T) {
+				req, err := http.NewRequest("GET", server.URL+tc.path, nil)
 				require.NoError(t, err)
 				req.Header.Set("Accept-Encoding", "gzip")
 				resp, err := fleethttp.NewClient().Do(req)
 				require.NoError(t, err)
 				defer resp.Body.Close()
 
-				require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"), "Expected gzip Content-Encoding when enabled")
+				require.Equal(t, tc.wantEncoding, resp.Header.Get("Content-Encoding"))
 			})
 		}
 
@@ -347,6 +366,41 @@ func TestGzipResponses(t *testing.T) {
 
 		require.Empty(t, resp.Header.Get("Content-Encoding"), "Expected no gzip Content-Encoding when disabled")
 	})
+}
+
+func TestIsCompressibleContentType(t *testing.T) {
+	for _, tc := range []struct {
+		contentType string
+		want        bool
+	}{
+		{"application/json", true},
+		{"application/json; charset=utf-8", true},
+		{"Application/JSON", true},
+		{"application/jwk-set+json", true},
+		{"application/xml", true},
+		{"application/soap+xml; charset=utf-8", true},
+		{"application/vnd.syncml.dm+xml", true},
+		{"text/plain; charset=utf-8", true},
+		{"text/csv", true},
+		{"text/html; charset=UTF-8", true},
+		{"application/octet-stream", false},
+		{"application/vnd.debian.binary-package", false},
+		{"application/vnd.microsoft.portable-executable", false},
+		{"application/pkcs7-mime", false},
+		{"application/x-apple-aspen-config", false},
+		{"application/zip", false},
+		{"image/svg+xml", true},
+		{"image/png", false},
+		{"image/webp", false},
+		{"application/pdf", false},
+		{"application/application/x-newton-compatible-pkg", false},
+		{"", false},
+		{"not a/content type", false},
+	} {
+		t.Run(tc.contentType, func(t *testing.T) {
+			require.Equal(t, tc.want, isCompressibleContentType(tc.contentType))
+		})
+	}
 }
 
 func TestFleetctl4VersionCheck(t *testing.T) {

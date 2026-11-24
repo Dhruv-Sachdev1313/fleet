@@ -1,0 +1,1 @@
+- When `server.gzip_responses` is enabled, Fleet now compresses only JSON, text, and XML API responses, so software installer downloads are no longer gzip-compressed.

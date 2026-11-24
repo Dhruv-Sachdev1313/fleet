@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -218,7 +219,10 @@ func useRouteMiddleware(r *endpointer.Router, cfg config.FleetConfig, ipStrategy
 		})
 	}
 	if cfg.Server.GzipResponses {
-		r.Use(func(_ endpointer.Route, next http.Handler) http.Handler { return gzhttp.GzipHandler(next) })
+		// Like ServeStaticAssets, serve uncompressed rather than fail if the wrapper can't be built.
+		if gzipWrapper, err := gzhttp.NewWrapper(gzhttp.ContentTypeFilter(isCompressibleContentType)); err == nil {
+			r.Use(func(_ endpointer.Route, next http.Handler) http.Handler { return gzipWrapper(next) })
+		}
 	}
 	r.Use(func(_ endpointer.Route, next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -232,6 +236,19 @@ func useRouteMiddleware(r *endpointer.Router, cfg config.FleetConfig, ipStrategy
 	if httpSigVerifier != nil {
 		r.Use(func(_ endpointer.Route, next http.Handler) http.Handler { return httpSigVerifier(next) })
 	}
+}
+
+// isCompressibleContentType allows only text-like types. gzhttp's default filter compresses any type it doesn't know to be
+// compressed already, including software installers served as application/octet-stream.
+func isCompressibleContentType(ct string) bool {
+	mediaType, _, err := mime.ParseMediaType(ct)
+	if err != nil {
+		return false
+	}
+	// The +json/+xml suffixes apply to any top-level type so SVG org logos (image/svg+xml) stay compressed.
+	return mediaType == "application/json" || mediaType == "application/xml" ||
+		strings.HasPrefix(mediaType, "text/") ||
+		strings.HasSuffix(mediaType, "+json") || strings.HasSuffix(mediaType, "+xml")
 }
 
 // PrometheusMetricsHandler wraps the provided handler with prometheus metrics

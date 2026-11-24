@@ -926,6 +926,8 @@ Maximum size for software installer uploads. Accepts human-readable size values 
 
 If enabled, the server will return gzip-compressed responses for HTTP requests to clients that indicate support. Client support is determined by the presence of `gzip` in an `Accept-Encoding` request header.
 
+Only text-based responses (JSON, text, and XML) are compressed. Binary responses, like software installer downloads, are sent uncompressed.
+
 Enable this to significantly reduce the outbound bandwidth from the Fleet server at a small expense to CPU utilization on the server.
 
 - Default value: false
